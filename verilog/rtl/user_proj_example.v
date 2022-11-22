@@ -75,91 +75,145 @@ module user_proj_example #(
     wire [`MPRJ_IO_PADS-1:0] io_out;
     wire [`MPRJ_IO_PADS-1:0] io_oeb;
 
-    wire [31:0] rdata; 
-    wire [31:0] wdata;
-    wire [BITS-1:0] count;
+wire [7:0] in1,in2,in3,in4;
+wire [5:0] in5;
+wire [16:0] out;
+assign {in5, in1, in2, in3, in4} = io_in[`MPRJ_IO_PADS-1:0];
+assign io_out = {21'd0, out};
 
-    wire valid;
-    wire [3:0] wstrb;
-    wire [31:0] la_write;
+sop_ax_k16_axl4 u1 (.a(in1),.b(in2),.c(in3),.d(in4),.out(out));
+endmodule
+module sop_ax_k16_axl4(a,b,c,d,out);
 
-    // WB MI A
-    assign valid = wbs_cyc_i && wbs_stb_i; 
-    assign wstrb = wbs_sel_i & {4{wbs_we_i}};
-    assign wbs_dat_o = rdata;
-    assign wdata = wbs_dat_i;
+input [7:0] a,b,c,d;
 
-    // IO
-    assign io_out = count;
-    assign io_oeb = {(`MPRJ_IO_PADS-1){rst}};
+output [16:0] out;
 
-    // IRQ
-    assign irq = 3'b000;	// Unused
+wire [15:0] w1,w2;
 
-    // LA
-    assign la_data_out = {{(127-BITS){1'b0}}, count};
-    // Assuming LA probes [63:32] are for controlling the count register  
-    assign la_write = ~la_oenb[63:32] & ~{BITS{valid}};
-    // Assuming LA probes [65:64] are for controlling the count clk & reset  
-    assign clk = (~la_oenb[64]) ? la_data_in[64]: wb_clk_i;
-    assign rst = (~la_oenb[65]) ? la_data_in[65]: wb_rst_i;
 
-    counter #(
-        .BITS(BITS)
-    ) counter(
-        .clk(clk),
-        .reset(rst),
-        .ready(wbs_ack_o),
-        .valid(valid),
-        .rdata(rdata),
-        .wdata(wbs_dat_i),
-        .wstrb(wstrb),
-        .la_write(la_write),
-        .la_input(la_data_in[63:32]),
-        .count(count)
-    );
+prop_ax8_using_4bit_4ax u1(a,b,w1);
+prop_ax8_using_4bit_4ax u2(a,b,w2);
+
+
+//assign w1= a*b;  // 8bit mul1
+//assign w2= c*d; // 8bit mul2
+
+//assign out= w1 + w2; // 16 bit adder
+
+axhrca_nek_rev_16 u3 (w1,w2,out);
 
 endmodule
 
-module counter #(
-    parameter BITS = 32
-)(
-    input clk,
-    input reset,
-    input valid,
-    input [3:0] wstrb,
-    input [BITS-1:0] wdata,
-    input [BITS-1:0] la_write,
-    input [BITS-1:0] la_input,
-    output ready,
-    output [BITS-1:0] rdata,
-    output [BITS-1:0] count
-);
-    reg ready;
-    reg [BITS-1:0] count;
-    reg [BITS-1:0] rdata;
+// 8 bit multiplier using 4 bit multipliers
 
-    always @(posedge clk) begin
-        if (reset) begin
-            count <= 0;
-            ready <= 0;
-        end else begin
-            ready <= 1'b0;
-            if (~|la_write) begin
-                count <= count + 1;
-            end
-            if (valid && !ready) begin
-                ready <= 1'b1;
-                rdata <= count;
-                if (wstrb[0]) count[7:0]   <= wdata[7:0];
-                if (wstrb[1]) count[15:8]  <= wdata[15:8];
-                if (wstrb[2]) count[23:16] <= wdata[23:16];
-                if (wstrb[3]) count[31:24] <= wdata[31:24];
-            end else if (|la_write) begin
-                count <= la_write & la_input;
-            end
-        end
+module prop_ax8_using_4bit_4ax(a,b,c);
+   
+input [7:0]a;
+input [7:0]b;
+output [15:0]c;
+
+wire [15:0]q0;	
+wire [15:0]q1;	
+wire [15:0]q2;
+wire [15:0]q3;	
+wire [15:0]c;
+wire [7:0]temp1;
+wire [11:0]temp2;
+wire [11:0]temp3;
+wire [11:0]temp4;
+wire [7:0]q4;
+wire [11:0]q5;
+wire [11:0]q6;
+// using 4 4x4 multipliers
+prop_mult2_sdk z1(a[3:0],b[3:0],q0[7:0]);
+
+prop_mult2_sdk z2(a[7:4],b[3:0],q1[7:0]);
+//assign q1[7:0]=a[7:4]*b[3:0];
+prop_mult2_sdk z3(a[3:0],b[7:4],q2[7:0]);
+//assign q2[7:0]=b[7:4]*a[3:0];
+prop_mult2_sdk z4(a[7:4],b[7:4],q3[7:0]);
+//assign q3[7:0]=a[7:4]*b[7:4];
+// stage 1 adders 
+assign temp1 ={4'b0,q0[7:4]};
+assign q4= temp1+q1[7:0];
+//add_8_bit z5(q1[7:0],temp1,q4);
+assign temp2 ={4'b0,q2[7:0]};
+assign temp3 ={q3[7:0],4'b0};
+assign q5=temp2+temp3;
+//add_12_bit z6(temp2,temp3,q5);
+assign temp4={4'b0,q4[7:0]};
+// stage 2 adder
+assign q6=temp4+q5;
+//add_12_bit z7(temp4,q5,q6);
+// fnal output assignment 
+assign c[3:0]=q0[3:0];
+assign c[15:4]=q6[11:0];
+
+endmodule
+
+
+
+module prop_mult2_sdk(A,B,out);
+input [3:0] A,B;
+output [7:0] out;
+ wire [3:0] p0,p1,p2,p3;
+ assign  p0 = A &{4{B[0]}};
+ assign  p1 = A & {4{B[1]}};
+ assign  p2 = A & {4{B[2]}};
+ assign  p3 = A & {4{B[3]}};
+  assign out[0]=p0[0];
+ assign out[1]=p0[1]^p1[0];
+ assign out[2]=p0[2]|p1[1]|p2[0];
+ assign out[3]= p0[3]|p1[2]|p2[1]|p3[0];
+ assign out[4]=p2[2]|p3[1]|p1[3];
+ assign out[5]= p2[3]^p3[2];
+ assign out[6]= p3[3];
+ assign out[7]=p3[3]&p2[2];
+ endmodule
+ 
+ module axhrca_nek_rev_16(a,b,sum);
+//parameter n=16;
+//parameter l=8;
+//parameter k=16;
+input [15:0] a,b;
+
+output [16:0] sum;
+wire [7:1]cout;
+wire cin;
+assign sum[0]=a[0]^b[0];
+assign cin=a[0]&b[0];
+ascfa4v2 u1 (a[1],b[1],cin,sum[1],cout[1]);
+genvar i;
+generate
+    for(i=2;i<=(7);i=i+1) begin
+        ascfa4v2 u2 (a[i],b[i],cout[i-1],sum[i],cout[i]);
     end
+endgenerate
+genvar j;
+generate 
+    for(j=8; j<=(15);j=j+1) begin
+    ascfa4v1 u3 (a[j],b[j],sum[j]);
+    end
+endgenerate
+assign sum[16]=a[15] & b[15];
+endmodule
+
+module ascfa4v1(a,b,sum);
+input a,b;
+output sum;
+wire w3=a|b;
+assign sum= w3;
 
 endmodule
+
+module ascfa4v2(a,b,cin,sum,cout);
+input a,b,cin;
+output sum,cout;
+wire w3=a|b;
+assign sum= w3|cin;
+assign cout= a&b;
+endmodule
+ 
+
 `default_nettype wire
